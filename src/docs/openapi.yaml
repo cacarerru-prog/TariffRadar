@@ -1,0 +1,414 @@
+openapi: 3.0.3
+info:
+  title: TariffRadar API
+  description: |
+    REST API системы мониторинга и сравнения тарифов логистических компаний.
+    Дипломный проект Качевского А.А., БГУИР, гр. 263102.
+  version: "1.0.0"
+  contact:
+    name: Качевский Александр
+    email: cacarer.ru@gmail.com
+
+servers:
+  - url: http://localhost:8080
+    description: Локальная разработка
+  - url: https://api.tariffradar.by
+    description: Production (планируемый)
+
+tags:
+  - name: auth
+    description: Регистрация и аутентификация
+  - name: market
+    description: Рыночная статистика
+  - name: deals
+    description: Сделки на перевозку
+  - name: benchmark
+    description: Сравнение ставки с рынком
+  - name: insights
+    description: Аналитика и тренды
+  - name: my-routes
+    description: Избранные маршруты пользователя
+  - name: export
+    description: Экспорт данных
+  - name: webhooks
+    description: Уведомления при изменении тарифов
+
+paths:
+  /health:
+    get:
+      summary: Проверка работоспособности
+      tags: [system]
+      responses:
+        '200':
+          description: Сервис работает
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: {type: string, example: ok}
+                  version: {type: string, example: "0.1.0"}
+                  db: {type: string, example: ok}
+                  cache: {type: string, example: ok}
+
+  /api/v1/auth/register:
+    post:
+      tags: [auth]
+      summary: Регистрация
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:    {type: string, format: email}
+                password: {type: string, minLength: 8}
+                name:     {type: string}
+                company:  {type: string}
+      responses:
+        '201': {description: Пользователь создан, content: {application/json: {schema: {$ref: '#/components/schemas/User'}}}}
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '409': {description: Email уже занят}
+
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Вход
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: {type: string}
+                password: {type: string}
+      responses:
+        '200':
+          description: JWT-токен
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:      {type: string}
+                  expires_at: {type: string, format: date-time}
+                  user:       {$ref: '#/components/schemas/User'}
+        '401': {description: Неверный email или пароль}
+
+  /api/v1/me:
+    get:
+      tags: [auth]
+      summary: Профиль текущего пользователя
+      security: [{bearerAuth: []}]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/User'}}}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+  /api/v1/market/stats:
+    get:
+      tags: [market]
+      summary: KPI рынка + line-chart
+      parameters:
+        - {in: query, name: from,   required: true,  schema: {type: string}, example: "Минск, Беларусь"}
+        - {in: query, name: to,     required: true,  schema: {type: string}, example: "Москва, Россия"}
+        - {in: query, name: type,   required: false, schema: {type: string, enum: [FTL, LTL]}, example: FTL}
+        - {in: query, name: period, required: false, schema: {type: string, enum: ["7Д","30Д","90Д","1Г"]}, example: "30Д"}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  as_of: {type: string, format: date}
+                  route:
+                    type: object
+                    properties:
+                      from: {type: string}
+                      to:   {type: string}
+                      type: {type: string}
+                  stats:
+                    type: object
+                    properties:
+                      avg:         {type: number}
+                      currency:    {type: string}
+                      min:         {type: number}
+                      max:         {type: number}
+                      change_pct:  {type: number}
+                      change_abs:  {type: number}
+                      deals_count: {type: integer}
+                  series:
+                    type: object
+                    properties:
+                      period: {type: string}
+                      labels: {type: array, items: {type: string}}
+                      values: {type: array, items: {type: number}}
+
+  /api/v1/deals:
+    get:
+      tags: [deals]
+      summary: История сделок (с пагинацией)
+      parameters:
+        - {in: query, name: from,     schema: {type: string}}
+        - {in: query, name: to,       schema: {type: string}}
+        - {in: query, name: type,     schema: {type: string}}
+        - {in: query, name: period,   schema: {type: string, enum: [7D, 30D, 90D, 1Y]}}
+        - {in: query, name: page,     schema: {type: integer, default: 1}}
+        - {in: query, name: per_page, schema: {type: integer, default: 20, maximum: 100}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:       {type: array, items: {$ref: '#/components/schemas/Deal'}}
+                  pagination: {$ref: '#/components/schemas/Pagination'}
+    post:
+      tags: [deals]
+      summary: Добавить сделку
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DealInput'
+      responses:
+        '201': {description: Создано, content: {application/json: {schema: {$ref: '#/components/schemas/Deal'}}}}
+        '400': {$ref: '#/components/responses/ValidationError'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {description: Нет роли analyst/admin}
+
+  /api/v1/benchmark:
+    post:
+      tags: [benchmark]
+      summary: Сравнить свою ставку с рынком
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, to, user_rate]
+              properties:
+                from:      {type: string}
+                to:        {type: string}
+                type:      {type: string, default: FTL}
+                user_rate: {type: number}
+                currency:  {type: string, default: EUR}
+                period:    {type: string, enum: [7D, 30D, 90D]}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  market:
+                    type: object
+                    properties:
+                      avg:         {type: number}
+                      min:         {type: number}
+                      max:         {type: number}
+                      currency:    {type: string}
+                      deals_count: {type: integer}
+                  user_rate:      {type: number}
+                  diff_abs:       {type: number}
+                  diff_pct:       {type: number}
+                  verdict:        {type: string, enum: [below_market, at_market, above_market]}
+                  percentile:     {type: integer}
+                  recommendation: {type: string}
+
+  /api/v1/insights/trends:
+    get:
+      tags: [insights]
+      summary: Топ растущих/падающих маршрутов
+      parameters:
+        - {in: query, name: period, schema: {type: string, enum: [7D, 30D, 90D]}}
+        - {in: query, name: limit,  schema: {type: integer, default: 5, maximum: 20}}
+      responses: {'200': {description: OK}}
+
+  /api/v1/insights/seasonality:
+    get:
+      tags: [insights]
+      summary: Сезонность ставок (12 месяцев)
+      parameters:
+        - {in: query, name: from, required: true, schema: {type: string}}
+        - {in: query, name: to,   required: true, schema: {type: string}}
+        - {in: query, name: type, schema: {type: string, default: FTL}}
+      responses: {'200': {description: OK}}
+
+  /api/v1/insights/by-cargo:
+    get:
+      tags: [insights]
+      summary: Средняя ставка по типу груза
+      parameters:
+        - {in: query, name: from, required: true, schema: {type: string}}
+        - {in: query, name: to,   required: true, schema: {type: string}}
+        - {in: query, name: type, schema: {type: string, default: FTL}}
+        - {in: query, name: period, schema: {type: string, enum: [7D, 30D, 90D]}}
+      responses: {'200': {description: OK}}
+
+  /api/v1/my/routes:
+    get:
+      tags: [my-routes]
+      summary: Избранные маршруты
+      security: [{bearerAuth: []}]
+      responses: {'200': {description: OK}}
+    post:
+      tags: [my-routes]
+      summary: Добавить маршрут в избранное
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, to]
+              properties:
+                from: {type: string}
+                to:   {type: string}
+                type: {type: string, default: FTL}
+      responses: {'201': {description: Создано}}
+
+  /api/v1/my/routes/{id}:
+    delete:
+      tags: [my-routes]
+      summary: Удалить из избранного
+      security: [{bearerAuth: []}]
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: integer}}
+      responses: {'204': {description: Удалено}, '404': {description: Не найдено}}
+
+  /api/v1/export/deals:
+    get:
+      tags: [export]
+      summary: Выгрузка сделок в CSV/Excel
+      parameters:
+        - {in: query, name: format, schema: {type: string, enum: [csv, xlsx], default: csv}}
+        - {in: query, name: from,   schema: {type: string}}
+        - {in: query, name: to,     schema: {type: string}}
+        - {in: query, name: period, schema: {type: string, enum: [7D, 30D, 90D, 1Y]}}
+      responses:
+        '200':
+          description: Файл
+          content:
+            text/csv: {schema: {type: string, format: binary}}
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {schema: {type: string, format: binary}}
+
+  /api/v1/webhooks:
+    get:
+      tags: [webhooks]
+      security: [{bearerAuth: []}]
+      summary: Список webhook'ов
+      responses: {'200': {description: OK}}
+    post:
+      tags: [webhooks]
+      security: [{bearerAuth: []}]
+      summary: Создать webhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:     {type: string, example: "https://my.app/hook"}
+                events:  {type: array, items: {type: string}, example: ["price.changed"]}
+                filters: {type: object, example: {from: "Минск", threshold_pct: 5}}
+      responses:
+        '201':
+          description: |
+            Создано. В ответе разово возвращается `secret` для HMAC-подписи payload'а.
+
+  /api/v1/webhooks/{id}:
+    delete:
+      tags: [webhooks]
+      security: [{bearerAuth: []}]
+      summary: Удалить webhook
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string, format: uuid}}
+      responses: {'204': {description: Удалено}, '404': {description: Не найдено}}
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:      {type: string, format: uuid}
+        email:   {type: string, format: email}
+        name:    {type: string}
+        company: {type: string}
+        role:    {type: string, enum: [viewer, analyst, admin]}
+
+    Deal:
+      type: object
+      properties:
+        id:       {type: integer}
+        date:     {type: string, format: date}
+        route:    {type: string}
+        cargo:    {type: string}
+        truck:    {type: string}
+        price:    {type: number}
+        currency: {type: string}
+        comment:  {type: string}
+
+    DealInput:
+      type: object
+      required: [from, to, type, date, cargo, truck, price, currency]
+      properties:
+        from:     {type: string, example: "Минск, Беларусь"}
+        to:       {type: string, example: "Москва, Россия"}
+        type:     {type: string, enum: [FTL, LTL]}
+        date:     {type: string, format: date, description: "Дата перевозки в формате YYYY-MM-DD. Не в будущем и не старше 1 года."}
+        cargo:    {type: string, enum: [FMCG, Металл, Одежда, Продукты, Химия, Стройматериалы, Мебель], description: "Тип груза — обязательно, выбирается клиентом из списка"}
+        truck:    {type: string, enum: ["Фура 20т", "Фура 10т", "Рефрижератор 20т", "Тентованный 20т"], description: "Тип ТС — обязательно, выбирается клиентом. Это пользовательский ввод, не вычисляемое поле."}
+        price:    {type: number, minimum: 0.01}
+        currency: {type: string, enum: [EUR, USD, BYN, RUB]}
+        comment:  {type: string}
+
+    Pagination:
+      type: object
+      properties:
+        page:        {type: integer}
+        per_page:    {type: integer}
+        total:       {type: integer}
+        total_pages: {type: integer}
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:    {type: string}
+            message: {type: string}
+            field:   {type: string}
+
+  responses:
+    ValidationError:
+      description: Ошибка валидации
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unauthorized:
+      description: Требуется авторизация
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
