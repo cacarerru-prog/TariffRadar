@@ -1,33 +1,22 @@
-# Папки диплома
+# Личные папки
 diploma/
 практика/
-пример-диплома2/
+пример-диплома*/
 
-# Файлы диплома
-Глава_*.docx
-Глава_6_содержание.md
-пример-диплома1.pdf
-пример-диплома3.docx
-стп.pdf
-экономика.pdf
+# Документы
+*.docx
+*.doc
+*.pdf
 
-# Скрипты и утилиты
+# Скрипты и утилиты в корне
+/*.bat
+/*.sh
+/*.py
+/*.jsx
+/*.html
 CLAUDE.md
-COMMIT.bat
 FRONTEND_PROMPT.md
 QUICK_START.md
-commit.sh
-generate_chapter6.py
-
-# Старый фронтенд (jsx/html в корне)
-tr-app.jsx
-tr-app (1).jsx
-tr-screens-1.jsx
-tr-screens-2.jsx
-tr-screens-3.jsx
-tr-shared.jsx
-tweaks-panel.jsx
-TariffRadar4 (2).html
 
 # OS
 .DS_Store
