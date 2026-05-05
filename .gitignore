@@ -1,8 +1,34 @@
-*
+# Папки диплома
+diploma/
+практика/
+пример-диплома2/
 
-!src/
-!src/**
-!frontend/
-!frontend/**
-!README.md
-!.gitignore
+# Файлы диплома
+Глава_*.docx
+Глава_6_содержание.md
+пример-диплома1.pdf
+пример-диплома3.docx
+стп.pdf
+экономика.pdf
+
+# Скрипты и утилиты
+CLAUDE.md
+COMMIT.bat
+FRONTEND_PROMPT.md
+QUICK_START.md
+commit.sh
+generate_chapter6.py
+
+# Старый фронтенд (jsx/html в корне)
+tr-app.jsx
+tr-app (1).jsx
+tr-screens-1.jsx
+tr-screens-2.jsx
+tr-screens-3.jsx
+tr-shared.jsx
+tweaks-panel.jsx
+TariffRadar4 (2).html
+
+# OS
+.DS_Store
+Thumbs.db
