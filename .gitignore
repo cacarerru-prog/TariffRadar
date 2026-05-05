@@ -1,42 +1,8 @@
-# Build
-/bin/
-/dist/
-*.exe
-*.dll
-*.so
-*.dylib
+*
 
-# Go
-/vendor/
-go.sum
-*.go~
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-.DS_Store
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Database
-*.db
-*.sql.bak
-
-# Logs
-*.log
-logs/
-
-# Temp
-tmp/
-temp/
-cache/
-
-# OS
-.DS_Store
-Thumbs.db
+!src/
+!src/**
+!frontend/
+!frontend/**
+!README.md
+!.gitignore

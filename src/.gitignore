@@ -24,3 +24,15 @@ Thumbs.db
 # Coverage
 coverage.txt
 coverage.html
+
+# Claude AI
+.claude/
+
+# Тестовые данные
+deals.csv
+deals.xlsx
+deals_noauth.csv
+
+# Внутренние доки
+HOW_TO_RUN.md
+README.md
