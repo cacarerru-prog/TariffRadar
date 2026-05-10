@@ -177,8 +177,8 @@ users ───< user_routes >─── routes ───< deals
 | `id` | UUID PK |
 | `user_id` | UUID FK |
 | `url` | VARCHAR(500) NOT NULL |
-| `events` | TEXT[] — `['price.changed']` |
-| `filters` | JSONB — `{ "from": "Минск", "threshold_pct": 5 }` |
+| `events` | TEXT[] — `['deal.created']` |
+| `filters` | JSONB — `{ "from": "Минск", "to": "Москва", "type": "FTL" }` |
 | `secret` | VARCHAR(255) — для HMAC-подписи payload'а |
 | `active` | BOOLEAN default `true` |
 | `created_at` | TIMESTAMPTZ |

@@ -240,7 +240,7 @@ KPI-карточки + line-chart на главной.
 
 ---
 
-## 10. Webhooks (уведомления при изменении тарифов)
+## 10. Webhooks (уведомления о новых сделках)
 
 ### `GET /api/v1/webhooks`
 Список зарегистрированных webhook'ов пользователя.
@@ -249,10 +249,40 @@ KPI-карточки + line-chart на главной.
 Зарегистрировать webhook.
 **Body:**
 ```json
-{ "url": "https://my.app/hook", "events": ["price.changed"], "filters": { "from": "Минск", "to": "Москва", "threshold_pct": 5 } }
+{ "url": "https://my.app/hook", "events": ["deal.created"], "filters": { "from": "Минск", "to": "Москва", "type": "FTL" } }
 ```
+Поля `filters` опциональны — пустое значение означает «любое».
 
 ### `DELETE /api/v1/webhooks/:id`
+Удалить webhook.
+
+### Payload, отправляемый подписчику
+
+При создании сделки TariffRadar делает `POST` на зарегистрированный URL:
+
+```json
+{
+  "event": "deal.created",
+  "occurred_at": "2026-05-10T14:32:00Z",
+  "data": {
+    "route": "Минск → Москва",
+    "type": "FTL",
+    "price": 1450.50,
+    "currency": "EUR",
+    "cargo": "FMCG",
+    "truck": "Фура 20т"
+  }
+}
+```
+
+**Заголовки запроса:**
+| Заголовок | Значение |
+|---|---|
+| `Content-Type` | `application/json` |
+| `X-TariffRadar-Event` | `deal.created` |
+| `X-TariffRadar-Signature` | `sha256=<HMAC-SHA256 hex>` |
+
+Подпись считается по телу запроса и секрету, указанному при регистрации хука (формат совместим с GitHub webhooks).
 
 ---
 
