@@ -298,6 +298,32 @@ KPI-карточки + line-chart на главной.
 Настройки уведомлений.
 **Body:** `{ "price_alerts": true, "weekly_digest": true, "benchmark_tips": false, "new_deals": false }`
 
+### `GET /api/v1/me/plan`
+Возвращает текущий тарифный план пользователя + использование лимитов.
+
+**Response 200:**
+```json
+{
+  "code": "free",
+  "name": "Free",
+  "price_byn": 0,
+  "status": "active",
+  "limits": {
+    "routes_max": 5,
+    "webhooks_max": 0,
+    "exports_per_month": 0,
+    "history_days": 30,
+    "rate_limit": 60
+  },
+  "usage": {
+    "routes_used": 2,
+    "webhooks_used": 0
+  }
+}
+```
+
+При попытке превысить лимит (создать webhook на free, добавить 6-й маршрут и т.д.) API отвечает `402 Payment Required` с `code: "plan_limit"`.
+
 ### `GET /api/v1/me/api-keys`, `POST /api/v1/me/api-keys`, `DELETE /api/v1/me/api-keys/:id`
 Управление API-ключами для интеграции.
 

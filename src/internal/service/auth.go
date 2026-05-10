@@ -34,14 +34,17 @@ var (
 // AuthService — сервис аутентификации.
 type AuthService struct {
 	users     *repository.UserRepo
+	plans     *repository.PlanRepo
 	jwtSecret []byte
 	jwtTTL    time.Duration
 }
 
 // NewAuthService — конструктор.
-func NewAuthService(users *repository.UserRepo, jwtSecret string, jwtTTL time.Duration) *AuthService {
+// plans может быть nil — тогда подписка на free не создаётся (для тестов).
+func NewAuthService(users *repository.UserRepo, plans *repository.PlanRepo, jwtSecret string, jwtTTL time.Duration) *AuthService {
 	return &AuthService{
 		users:     users,
+		plans:     plans,
 		jwtSecret: []byte(jwtSecret),
 		jwtTTL:    jwtTTL,
 	}
@@ -82,6 +85,15 @@ func (s *AuthService) Register(ctx context.Context, in RegisterInput) (*models.U
 
 	if err := s.users.Create(ctx, user); err != nil {
 		return nil, err
+	}
+
+	// Подписываем нового пользователя на бесплатный тариф.
+	// Ошибка не блокирует регистрацию — миграция 0006 делает backfill для пропущенных.
+	if s.plans != nil {
+		if err := s.plans.EnsureSubscription(ctx, user.ID); err != nil {
+			// Лог не делаем тут (нет логгера) — UI всё равно увидит free через GetUserPlan fallback.
+			_ = err
+		}
 	}
 	return user, nil
 }

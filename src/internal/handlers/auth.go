@@ -20,11 +20,12 @@ import (
 type AuthHandler struct {
 	auth  *service.AuthService
 	users *repository.UserRepo
+	plans *repository.PlanRepo
 }
 
 // NewAuthHandler — конструктор.
-func NewAuthHandler(auth *service.AuthService, users *repository.UserRepo) *AuthHandler {
-	return &AuthHandler{auth: auth, users: users}
+func NewAuthHandler(auth *service.AuthService, users *repository.UserRepo, plans *repository.PlanRepo) *AuthHandler {
+	return &AuthHandler{auth: auth, users: users, plans: plans}
 }
 
 // ── POST /auth/register ──────────────────────────────────────────────────────
@@ -220,4 +221,53 @@ func (h *AuthHandler) PatchPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "password_changed"})
+}
+
+// ── GET /api/v1/me/plan ──────────────────────────────────────────────────────
+
+// planResponse — план + использование лимитов, для UI экрана подписки.
+type planResponse struct {
+	Code     string `json:"code"`
+	Name     string `json:"name"`
+	PriceBYN float64 `json:"price_byn"`
+	Status   string `json:"status"`
+	Limits   struct {
+		RoutesMax       int `json:"routes_max"`
+		WebhooksMax     int `json:"webhooks_max"`
+		ExportsPerMonth int `json:"exports_per_month"`
+		HistoryDays     int `json:"history_days"`
+		RateLimit       int `json:"rate_limit"`
+	} `json:"limits"`
+	Usage struct {
+		RoutesUsed   int `json:"routes_used"`
+		WebhooksUsed int `json:"webhooks_used"`
+	} `json:"usage"`
+}
+
+// Plan — текущий тариф пользователя + сколько уже использовано.
+func (h *AuthHandler) Plan(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Требуется авторизация")
+		return
+	}
+
+	up, err := h.plans.GetUserPlan(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Не удалось получить план")
+		return
+	}
+
+	resp := planResponse{
+		Code: up.Plan.Code, Name: up.Plan.Name, PriceBYN: up.Plan.PriceBYN, Status: up.Status,
+	}
+	resp.Limits.RoutesMax = up.Plan.RoutesMax
+	resp.Limits.WebhooksMax = up.Plan.WebhooksMax
+	resp.Limits.ExportsPerMonth = up.Plan.ExportsPerMonth
+	resp.Limits.HistoryDays = up.Plan.HistoryDays
+	resp.Limits.RateLimit = up.Plan.RateLimit
+	resp.Usage.RoutesUsed = up.RoutesUsed
+	resp.Usage.WebhooksUsed = up.WebhooksUsed
+
+	writeJSON(w, http.StatusOK, resp)
 }

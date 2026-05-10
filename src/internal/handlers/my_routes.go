@@ -16,12 +16,13 @@ import (
 
 // MyRoutesHandler — обработчики избранных маршрутов.
 type MyRoutesHandler struct {
-	repo *repository.UserRouteRepo
+	repo  *repository.UserRouteRepo
+	plans *repository.PlanRepo
 }
 
 // NewMyRoutesHandler — конструктор.
-func NewMyRoutesHandler(repo *repository.UserRouteRepo) *MyRoutesHandler {
-	return &MyRoutesHandler{repo: repo}
+func NewMyRoutesHandler(repo *repository.UserRouteRepo, plans *repository.PlanRepo) *MyRoutesHandler {
+	return &MyRoutesHandler{repo: repo, plans: plans}
 }
 
 // savedRouteDTO — формат записи в JSON-ответе.
@@ -98,6 +99,16 @@ func (h *MyRoutesHandler) Add(w http.ResponseWriter, r *http.Request) {
 	if req.Type != "FTL" && req.Type != "LTL" {
 		writeError(w, http.StatusBadRequest, "invalid_type", "type должен быть 'FTL' или 'LTL'")
 		return
+	}
+
+	// Проверка лимита тарифа.
+	if h.plans != nil {
+		up, err := h.plans.GetUserPlan(r.Context(), userID)
+		if err == nil && up.RoutesUsed >= up.Plan.RoutesMax {
+			writeError(w, http.StatusPaymentRequired, "plan_limit",
+				"Достигнут лимит избранных маршрутов по вашему тарифу ("+up.Plan.Name+"). Обновите план.")
+			return
+		}
 	}
 
 	id, err := h.repo.Add(r.Context(), userID, req.From, req.To, req.Type)

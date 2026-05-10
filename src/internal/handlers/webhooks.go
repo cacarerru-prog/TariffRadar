@@ -20,12 +20,13 @@ import (
 
 // WebhooksHandler — обработчики webhooks.
 type WebhooksHandler struct {
-	repo *repository.WebhookRepo
+	repo  *repository.WebhookRepo
+	plans *repository.PlanRepo
 }
 
 // NewWebhooksHandler — конструктор.
-func NewWebhooksHandler(repo *repository.WebhookRepo) *WebhooksHandler {
-	return &WebhooksHandler{repo: repo}
+func NewWebhooksHandler(repo *repository.WebhookRepo, plans *repository.PlanRepo) *WebhooksHandler {
+	return &WebhooksHandler{repo: repo, plans: plans}
 }
 
 // ── DTO ──────────────────────────────────────────────────────────────────────
@@ -87,6 +88,16 @@ func (h *WebhooksHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden",
 			"Webhooks доступны только аналитикам и администраторам")
 		return
+	}
+
+	// Проверка лимита тарифа.
+	if h.plans != nil {
+		up, err := h.plans.GetUserPlan(r.Context(), userID)
+		if err == nil && up.WebhooksUsed >= up.Plan.WebhooksMax {
+			writeError(w, http.StatusPaymentRequired, "plan_limit",
+				"Достигнут лимит webhooks по вашему тарифу ("+up.Plan.Name+"). Обновите план.")
+			return
+		}
 	}
 
 	var req createWebhookReq
