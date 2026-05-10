@@ -2,6 +2,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -11,16 +12,22 @@ import (
 	"tariffradar/internal/middleware"
 	"tariffradar/internal/models"
 	"tariffradar/internal/repository"
+	"tariffradar/internal/service"
 )
 
 // DealsHandler — обработчики сделок.
 type DealsHandler struct {
-	deals *repository.DealRepo
+	deals      *repository.DealRepo
+	dispatcher interface {
+		DispatchDealCreated(ctx context.Context, ev service.DealEvent)
+	}
 }
 
 // NewDealsHandler — конструктор.
-func NewDealsHandler(deals *repository.DealRepo) *DealsHandler {
-	return &DealsHandler{deals: deals}
+func NewDealsHandler(deals *repository.DealRepo, dispatcher interface {
+	DispatchDealCreated(ctx context.Context, ev service.DealEvent)
+}) *DealsHandler {
+	return &DealsHandler{deals: deals, dispatcher: dispatcher}
 }
 
 // ── GET /api/v1/deals ────────────────────────────────────────────────────────
@@ -245,6 +252,20 @@ func (h *DealsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error",
 			"Не удалось сохранить сделку")
 		return
+	}
+
+	// Уведомляем подписчиков webhook'ов (асинхронно, не блокирует ответ).
+	if h.dispatcher != nil {
+		h.dispatcher.DispatchDealCreated(r.Context(), service.DealEvent{
+			Route:    req.From + " → " + req.To,
+			Type:     req.Type,
+			Price:    deal.Price,
+			Currency: string(deal.Currency),
+			Cargo:    deal.CargoType,
+			Truck:    deal.TruckType,
+			FromCity: req.From,
+			ToCity:   req.To,
+		})
 	}
 
 	// Возвращаем созданную сделку (без user_id).

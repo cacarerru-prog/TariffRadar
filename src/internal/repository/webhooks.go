@@ -94,3 +94,45 @@ func (r *WebhookRepo) Delete(ctx context.Context, userID, id uuid.UUID) error {
 	}
 	return nil
 }
+
+// ListActiveByEvent — возвращает все активные webhooks, подписанные на event.
+// Используется диспетчером для рассылки уведомлений.
+func (r *WebhookRepo) ListActiveByEvent(ctx context.Context, event string) ([]Webhook, error) {
+	// $1 = ANY(events) — проверяем, что event присутствует в массиве postgres.
+	const query = `
+		SELECT id, user_id, url, events, filters::TEXT, secret, active
+		FROM webhooks
+		WHERE active = TRUE AND $1 = ANY(events)
+		ORDER BY created_at`
+
+	rows, err := r.db.Query(ctx, query, event)
+	if err != nil {
+		return nil, fmt.Errorf("webhooks.ListActiveByEvent: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Webhook
+	for rows.Next() {
+		var w Webhook
+		var filtersJSON string
+		if err := rows.Scan(&w.ID, &w.UserID, &w.URL, &w.Events, &filtersJSON, &w.Secret, &w.Active); err != nil {
+			return nil, fmt.Errorf("webhooks.ListActiveByEvent scan: %w", err)
+		}
+		_ = json.Unmarshal([]byte(filtersJSON), &w.Filters)
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// SaveDelivery — сохраняет запись о попытке доставки webhook'а.
+// status = 0 означает сетевую ошибку (ответ от подписчика не получен).
+func (r *WebhookRepo) SaveDelivery(ctx context.Context, webhookID uuid.UUID, payload []byte, status int) error {
+	const query = `
+		INSERT INTO webhook_deliveries (webhook_id, payload, response_status, attempt, delivered_at)
+		VALUES ($1, $2::JSONB, $3, 1, now())`
+
+	if _, err := r.db.Exec(ctx, query, webhookID, string(payload), status); err != nil {
+		return fmt.Errorf("webhooks.SaveDelivery: %w", err)
+	}
+	return nil
+}

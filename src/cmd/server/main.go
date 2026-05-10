@@ -73,9 +73,10 @@ func main() {
 	insightsSvc := service.NewInsightsService(insightsRepo, cache)
 	benchmarkSvc := service.NewBenchmarkService(marketRepo, benchmarkRepo)
 	exportSvc := service.NewExportService(dealRepo)
+	dispatcher := service.NewDispatcher(webhookRepo)
 
 	authHandler := handlers.NewAuthHandler(authSvc, userRepo)
-	dealsHandler := handlers.NewDealsHandler(dealRepo)
+	dealsHandler := handlers.NewDealsHandler(dealRepo, dispatcher)
 	marketHandler := handlers.NewMarketHandler(marketSvc)
 	insightsHandler := handlers.NewInsightsHandler(insightsSvc)
 	benchmarkHandler := handlers.NewBenchmarkHandler(benchmarkSvc)
