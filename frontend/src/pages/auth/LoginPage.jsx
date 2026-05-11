@@ -59,6 +59,7 @@ export function LoginPage() {
             <div className="form-group">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <label className="form-label">Пароль</label>
+                <Link to="/forgot-password" style={{ fontSize: 11, color: '#2563EB', textDecoration: 'none' }}>Забыли пароль?</Link>
               </div>
               <div style={{ position: 'relative' }}>
                 <input className="form-input" type={showPass ? 'text' : 'password'} placeholder="••••••••"

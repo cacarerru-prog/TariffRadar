@@ -7,4 +7,11 @@ export const authApi = {
   patchMe:  (data)                        => api.patch('/me', data),
   patchPassword: (current_password, new_password) =>
     api.patch('/me/password', { current_password, new_password }),
+
+  logout:                  ()             => api.post('/auth/logout', {}),
+  verifyEmail:             (token)        => api.post('/auth/verify-email', { token }),
+  resendVerification:      ()             => api.post('/auth/resend-verification', {}),
+  passwordResetRequest:    (email)        => api.post('/auth/password-reset/request', { email }),
+  passwordResetConfirm:    (token, new_password) =>
+    api.post('/auth/password-reset/confirm', { token, new_password }),
 }

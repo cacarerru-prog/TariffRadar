@@ -21,6 +21,10 @@ async function request(method, path, body, signal) {
     throw new Error('unauthorized')
   }
 
+  if (res.status === 429) {
+    throw new Error('Слишком много запросов — подождите минуту')
+  }
+
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
     try {

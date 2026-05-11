@@ -33,7 +33,8 @@ export function AuthProvider({ children }) {
     return login(email, password)
   }, [login])
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    try { await authApi.logout() } catch { /* even if it fails, clear locally */ }
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     setUser(null)

@@ -1,5 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { authApi } from '../api/auth'
+import { notificationsApi } from '../api/notifications'
+import { apiKeysApi } from '../api/apiKeys'
+import { webhooksApi } from '../api/webhooks'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../components/ui/Toast'
 import { useNavigate } from 'react-router-dom'
@@ -8,6 +11,7 @@ const SECTIONS = [
   { id: 'profile',       label: 'Профиль',          icon: 'M8 8a4 4 0 100-8 4 4 0 000 8zM2 20c0-4 2.7-7.3 6-8' },
   { id: 'appearance',    label: 'Внешний вид',       icon: 'M12 2a10 10 0 110 20A10 10 0 0112 2zm0 0v20M2 12h20' },
   { id: 'notifications', label: 'Уведомления',       icon: 'M8 2a5 5 0 015 5v2l1 2H2l1-2V7a5 5 0 015-5zM6.5 13a1.5 1.5 0 003 0' },
+  { id: 'webhooks',      label: 'Webhooks',          icon: 'M10 3v6m0 0l-3-3m3 3l3-3M5 13a5 5 0 1010 0' },
   { id: 'api',           label: 'API-ключи',         icon: 'M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.778-7.778zm0 0L15.5 7.5' },
   { id: 'security',      label: 'Безопасность',      icon: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z' },
 ]
@@ -68,7 +72,8 @@ export function SettingsPage() {
           {section === 'profile'       && <ProfileSection user={user} onUpdate={updateUser} toast={toast} initials={initials} />}
           {section === 'appearance'    && <AppearanceSection toast={toast} />}
           {section === 'notifications' && <NotificationsSection toast={toast} />}
-          {section === 'api'           && <ApiSection toast={toast} user={user} />}
+          {section === 'webhooks'      && <WebhooksSection toast={toast} />}
+          {section === 'api'           && <ApiSection toast={toast} />}
           {section === 'security'      && <SecuritySection toast={toast} onLogout={handleLogout} />}
         </div>
       </div>
@@ -180,28 +185,44 @@ function AppearanceSection({ toast }) {
   )
 }
 
-const NOTIF_KEY = 'tr_notifications'
-const NOTIF_DEFAULTS = { rate_alerts: true, weekly_digest: true, market_news: false, deal_updates: true }
+const NOTIF_DEFAULTS = { price_alerts: true, weekly_digest: true, benchmark_tips: false, new_deals: false }
 
 function NotificationsSection({ toast }) {
-  const [settings, setSettings] = useState(() => {
-    try { return { ...NOTIF_DEFAULTS, ...JSON.parse(localStorage.getItem(NOTIF_KEY)) } }
-    catch { return NOTIF_DEFAULTS }
-  })
+  const [settings, setSettings] = useState(NOTIF_DEFAULTS)
+  const [loading, setLoading] = useState(true)
 
-  function toggle(k) {
+  useEffect(() => {
+    let cancelled = false
+    notificationsApi.get()
+      .then(data => { if (!cancelled) setSettings(data) })
+      .catch(() => { if (!cancelled) toast('Не удалось загрузить настройки уведомлений') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  async function toggle(k) {
     const updated = { ...settings, [k]: !settings[k] }
     setSettings(updated)
-    localStorage.setItem(NOTIF_KEY, JSON.stringify(updated))
-    toast(`${updated[k] ? 'Включено' : 'Отключено'}: ${k.replace(/_/g, ' ')}`)
+    try {
+      await notificationsApi.update(updated)
+      toast(`${updated[k] ? 'Включено' : 'Отключено'}: ${k.replace(/_/g, ' ')}`)
+    } catch {
+      // Откат при ошибке.
+      setSettings(settings)
+      toast('Не удалось сохранить — попробуйте ещё раз')
+    }
   }
 
   const items = [
-    { k: 'rate_alerts',    label: 'Алерты по ставкам',       desc: 'Уведомления при изменении ставки более чем на 5%' },
+    { k: 'price_alerts',   label: 'Алерты по ставкам',       desc: 'Уведомления при изменении ставки более чем на 5%' },
     { k: 'weekly_digest',  label: 'Еженедельный дайджест',    desc: 'Сводка изменений по вашим маршрутам' },
-    { k: 'market_news',    label: 'Новости рынка',            desc: 'Аналитические статьи и обзоры' },
-    { k: 'deal_updates',   label: 'Обновления по сделкам',    desc: 'Статус добавленных вами данных' },
+    { k: 'benchmark_tips', label: 'Подсказки бенчмарка',      desc: 'Рекомендации по оптимизации ставок' },
+    { k: 'new_deals',      label: 'Новые сделки',             desc: 'Уведомления о появлении сделок по вашим маршрутам' },
   ]
+
+  if (loading) {
+    return <div className="card"><div className="card-title">Уведомления</div><div style={{ color: '#94A3B8', fontSize: 13 }}>Загрузка…</div></div>
+  }
 
   return (
     <div className="card">
@@ -230,15 +251,223 @@ function NotificationsSection({ toast }) {
   )
 }
 
-function ApiSection({ toast, user }) {
-  const [copied, setCopied] = useState(false)
-  const key = user?.api_key || 'tr_live_xxxxxxxxxxxxxxxxxxxx'
+function WebhooksSection({ toast }) {
+  const [hooks, setHooks]     = useState([])
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [form, setForm]       = useState({ url: '', from: '', to: '', type: '' })
+  const [shownSecret, setShownSecret] = useState(null) // показывается ОДИН раз
+  const [openDeliveries, setOpenDeliveries] = useState(null)
+  const [deliveries, setDeliveries] = useState([])
+  const [loadingDeliveries, setLoadingDeliveries] = useState(false)
 
-  function copyKey() {
-    navigator.clipboard.writeText(key).catch(() => {})
-    setCopied(true)
-    toast('Ключ скопирован')
-    setTimeout(() => setCopied(false), 2000)
+  useEffect(() => { reload() }, [])
+
+  async function reload() {
+    setLoading(true)
+    try   { setHooks(await webhooksApi.list() || []) }
+    catch (err) { toast(err.message || 'Не удалось загрузить webhooks', 'error') }
+    finally { setLoading(false) }
+  }
+
+  async function create() {
+    if (!form.url.trim()) { toast('Укажите URL', 'error'); return }
+    setCreating(true)
+    try {
+      const filters = {}
+      if (form.from) filters.from = form.from
+      if (form.to)   filters.to   = form.to
+      if (form.type) filters.type = form.type
+
+      const h = await webhooksApi.create({ url: form.url.trim(), events: ['deal.created'], filters })
+      setShownSecret({ url: h.url, secret: h.secret })
+      setForm({ url: '', from: '', to: '', type: '' })
+      await reload()
+    } catch (err) {
+      toast(err.message || 'Не удалось создать webhook', 'error')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function remove(id) {
+    if (!confirm('Удалить webhook? Уведомления на этот URL больше не будут отправляться.')) return
+    try {
+      await webhooksApi.remove(id)
+      toast('Webhook удалён')
+      await reload()
+    } catch (err) {
+      toast(err.message || 'Не удалось удалить webhook', 'error')
+    }
+  }
+
+  async function loadDeliveries(id) {
+    if (openDeliveries === id) { setOpenDeliveries(null); return }
+    setOpenDeliveries(id)
+    setLoadingDeliveries(true)
+    try {
+      setDeliveries(await webhooksApi.deliveries(id) || [])
+    } catch (err) {
+      toast(err.message || 'Не удалось загрузить историю доставок', 'error')
+      setDeliveries([])
+    } finally {
+      setLoadingDeliveries(false)
+    }
+  }
+
+  function copy(text) {
+    navigator.clipboard.writeText(text).catch(() => {})
+    toast('Скопировано')
+  }
+
+  return (
+    <div className="card">
+      <div className="card-title">Webhooks</div>
+      <div className="info-banner" style={{ marginBottom: 16 }}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 7v4M8 5.5v.5"/></svg>
+        <div>Webhook'и доступны на тарифе <strong>Pro</strong>. При создании новой сделки на указанный URL уходит POST с HMAC-подписью.</div>
+      </div>
+
+      {shownSecret && (
+        <div style={{ marginBottom: 16, padding: 14, background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#92400E', marginBottom: 8 }}>
+            Сохраните секрет — он показывается только один раз
+          </div>
+          <div style={{ fontSize: 12, color: '#92400E', marginBottom: 6, fontFamily: 'monospace' }}>URL: {shownSecret.url}</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input className="form-input" value={shownSecret.secret} readOnly
+              style={{ flex: 1, fontFamily: 'monospace', fontSize: 12 }} />
+            <button className="btn-secondary" onClick={() => copy(shownSecret.secret)}>Копировать</button>
+            <button className="btn-secondary" onClick={() => setShownSecret(null)}>Закрыть</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+        <input className="form-input" placeholder="URL (https://example.com/hook)"
+          value={form.url} onChange={e => setForm(f => ({ ...f, url: e.target.value }))} />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input className="form-input" placeholder="Откуда (опционально)" style={{ flex: 1 }}
+            value={form.from} onChange={e => setForm(f => ({ ...f, from: e.target.value }))} />
+          <input className="form-input" placeholder="Куда (опционально)" style={{ flex: 1 }}
+            value={form.to} onChange={e => setForm(f => ({ ...f, to: e.target.value }))} />
+          <select className="form-input" style={{ flex: 1 }}
+            value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>
+            <option value="">Любой тип</option>
+            <option value="FTL">FTL</option>
+            <option value="LTL">LTL</option>
+          </select>
+        </div>
+        <button className="btn-primary" onClick={create} disabled={creating}>
+          {creating ? 'Создаём…' : 'Создать webhook'}
+        </button>
+      </div>
+
+      {loading ? (
+        <div style={{ color: '#94A3B8', fontSize: 13 }}>Загрузка…</div>
+      ) : hooks.length === 0 ? (
+        <div style={{ color: '#94A3B8', fontSize: 13, padding: '20px 0', textAlign: 'center' }}>
+          Ещё нет ни одного webhook'а
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+          {hooks.map((h, i) => (
+            <div key={h.id} style={{
+              padding: '12px 0', borderBottom: i < hooks.length - 1 ? '1px solid #F1F5F9' : 'none',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: '#0F172A', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {h.url}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
+                    События: {h.events?.join(', ')}
+                    {h.filters && Object.keys(h.filters).length > 0 && (
+                      <> · Фильтры: {Object.entries(h.filters).map(([k, v]) => `${k}=${v}`).join(', ')}</>
+                    )}
+                  </div>
+                </div>
+                <button className="btn-secondary" onClick={() => loadDeliveries(h.id)} style={{ flexShrink: 0 }}>
+                  {openDeliveries === h.id ? 'Скрыть' : 'История'}
+                </button>
+                <button className="btn-secondary" onClick={() => remove(h.id)}
+                  style={{ color: '#DC2626', borderColor: '#FECACA', flexShrink: 0 }}>Удалить</button>
+              </div>
+              {openDeliveries === h.id && (
+                <div style={{ marginTop: 10, padding: 10, background: '#F8FAFC', borderRadius: 6, fontSize: 12 }}>
+                  {loadingDeliveries ? (
+                    <div style={{ color: '#94A3B8' }}>Загрузка…</div>
+                  ) : deliveries.length === 0 ? (
+                    <div style={{ color: '#94A3B8' }}>Доставок пока нет</div>
+                  ) : (
+                    deliveries.map(d => (
+                      <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #E2E8F0' }}>
+                        <span style={{ color: '#64748B' }}>{d.delivered_at?.slice(0, 19).replace('T', ' ')}</span>
+                        <span style={{
+                          fontWeight: 600,
+                          color: d.response_status >= 200 && d.response_status < 300 ? '#16A34A' :
+                                 d.response_status === 0 ? '#94A3B8' : '#DC2626',
+                        }}>
+                          {d.response_status === 0 ? 'сетевая ошибка' : `HTTP ${d.response_status}`}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ApiSection({ toast }) {
+  const [keys, setKeys]       = useState([])
+  const [loading, setLoading] = useState(true)
+  const [newName, setNewName] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [shownKey, setShownKey] = useState(null) // показывается ОДИН раз после создания
+
+  useEffect(() => { reload() }, [])
+
+  async function reload() {
+    setLoading(true)
+    try   { setKeys(await apiKeysApi.list() || []) }
+    catch { toast('Не удалось загрузить API-ключи', 'error') }
+    finally { setLoading(false) }
+  }
+
+  async function create() {
+    if (!newName.trim()) { toast('Введите имя ключа', 'error'); return }
+    setCreating(true)
+    try {
+      const k = await apiKeysApi.create(newName.trim())
+      setShownKey(k.key) // показываем полный ключ один раз
+      setNewName('')
+      await reload()
+    } catch (err) {
+      toast(err.message || 'Не удалось создать ключ', 'error')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function remove(id) {
+    if (!confirm('Удалить API-ключ? Все интеграции, использующие его, перестанут работать.')) return
+    try {
+      await apiKeysApi.remove(id)
+      toast('Ключ удалён')
+      await reload()
+    } catch (err) {
+      toast(err.message || 'Не удалось удалить ключ', 'error')
+    }
+  }
+
+  function copy(text) {
+    navigator.clipboard.writeText(text).catch(() => {})
+    toast('Скопировано')
   }
 
   return (
@@ -246,25 +475,60 @@ function ApiSection({ toast, user }) {
       <div className="card-title">API-ключи</div>
       <div className="info-banner" style={{ marginBottom: 16 }}>
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 7v4M8 5.5v.5"/></svg>
-        <div>API доступен только на тарифе <strong>Pro</strong>. Используйте ключ для интеграции с внешними системами.</div>
+        <div>API доступен на тарифе <strong>Pro</strong>. Используйте ключ для интеграции — в заголовке <code>Authorization: Bearer trk_live_…</code>.</div>
       </div>
-      <div className="form-group">
-        <label className="form-label">Ваш API-ключ</label>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input className="form-input" type="text" value={key} readOnly
-            style={{ flex: 1, fontFamily: 'monospace', fontSize: 12, background: '#F8FAFC' }} />
-          <button className="btn-secondary" onClick={copyKey} style={{ flexShrink: 0 }}>
-            {copied ? '✓ Скопирован' : 'Копировать'}
-          </button>
+
+      {shownKey && (
+        <div style={{ marginBottom: 16, padding: 14, background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#92400E', marginBottom: 8 }}>
+            Сохраните ключ — он показывается только один раз
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input className="form-input" value={shownKey} readOnly
+              style={{ flex: 1, fontFamily: 'monospace', fontSize: 12 }} />
+            <button className="btn-secondary" onClick={() => copy(shownKey)}>Копировать</button>
+            <button className="btn-secondary" onClick={() => setShownKey(null)}>Закрыть</button>
+          </div>
         </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <input className="form-input" placeholder="Название (например, «Production»)"
+          value={newName} onChange={e => setNewName(e.target.value)} style={{ flex: 1 }} />
+        <button className="btn-primary" onClick={create} disabled={creating}>
+          {creating ? 'Создаём…' : 'Создать ключ'}
+        </button>
       </div>
-      <div style={{ marginTop: 16, padding: '12px 14px', background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0' }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8 }}>Пример запроса</div>
-        <pre style={{ fontSize: 11, color: '#64748B', margin: 0, fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-{`GET /api/v1/market/stats?from=Минск&to=Москва&type=FTL
-Authorization: Bearer ${key}`}
-        </pre>
-      </div>
+
+      {loading ? (
+        <div style={{ color: '#94A3B8', fontSize: 13 }}>Загрузка…</div>
+      ) : keys.length === 0 ? (
+        <div style={{ color: '#94A3B8', fontSize: 13, padding: '20px 0', textAlign: 'center' }}>
+          Ещё нет ни одного ключа
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+          {keys.map((k, i) => (
+            <div key={k.id} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '12px 0', borderBottom: i < keys.length - 1 ? '1px solid #F1F5F9' : 'none',
+            }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500, color: '#0F172A' }}>{k.name}</div>
+                <div style={{ fontSize: 11, color: '#64748B', marginTop: 2, fontFamily: 'monospace' }}>
+                  {k.prefix}…
+                </div>
+                <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 2 }}>
+                  Создан: {new Date(k.created_at).toLocaleDateString()}
+                  {k.last_used_at && ` • Последнее использование: ${new Date(k.last_used_at).toLocaleDateString()}`}
+                </div>
+              </div>
+              <button className="btn-secondary" onClick={() => remove(k.id)}
+                style={{ color: '#DC2626', borderColor: '#FECACA' }}>Удалить</button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
