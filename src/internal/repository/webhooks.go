@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -120,6 +121,48 @@ func (r *WebhookRepo) ListActiveByEvent(ctx context.Context, event string) ([]We
 		}
 		_ = json.Unmarshal([]byte(filtersJSON), &w.Filters)
 		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// Delivery — одна запись о попытке доставки webhook'а.
+type Delivery struct {
+	ID             int64
+	WebhookID      uuid.UUID
+	Payload        string
+	ResponseStatus int
+	Attempt        int
+	DeliveredAt    *time.Time
+}
+
+// ListDeliveries — последние N попыток доставки конкретного хука.
+// Возвращает только хуки указанного пользователя (для безопасности).
+func (r *WebhookRepo) ListDeliveries(ctx context.Context, userID, webhookID uuid.UUID, limit int) ([]Delivery, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+
+	const query = `
+		SELECT d.id, d.webhook_id, d.payload::TEXT, COALESCE(d.response_status, 0), d.attempt, d.delivered_at
+		FROM webhook_deliveries d
+		JOIN webhooks w ON w.id = d.webhook_id
+		WHERE d.webhook_id = $1 AND w.user_id = $2
+		ORDER BY d.delivered_at DESC NULLS LAST
+		LIMIT $3`
+
+	rows, err := r.db.Query(ctx, query, webhookID, userID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("webhooks.ListDeliveries: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Delivery
+	for rows.Next() {
+		var d Delivery
+		if err := rows.Scan(&d.ID, &d.WebhookID, &d.Payload, &d.ResponseStatus, &d.Attempt, &d.DeliveredAt); err != nil {
+			return nil, fmt.Errorf("webhooks.ListDeliveries scan: %w", err)
+		}
+		out = append(out, d)
 	}
 	return out, rows.Err()
 }

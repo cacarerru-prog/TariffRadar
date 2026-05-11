@@ -50,6 +50,7 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
 	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(dst); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", "Некорректный JSON в теле запроса")

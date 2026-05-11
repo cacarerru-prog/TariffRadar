@@ -7,6 +7,7 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -38,11 +39,12 @@ type registerReq struct {
 }
 
 type userPublic struct {
-	ID      string `json:"id"`
-	Email   string `json:"email"`
-	Name    string `json:"name,omitempty"`
-	Company string `json:"company,omitempty"`
-	Role    string `json:"role"`
+	ID            string `json:"id"`
+	Email         string `json:"email"`
+	Name          string `json:"name,omitempty"`
+	Company       string `json:"company,omitempty"`
+	Role          string `json:"role"`
+	EmailVerified bool   `json:"email_verified"`
 }
 
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +75,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusCreated, userPublic{
 		ID: user.ID.String(), Email: user.Email, Name: user.Name,
-		Company: user.Company, Role: string(user.Role),
+		Company: user.Company, Role: string(user.Role), EmailVerified: user.EmailVerified,
 	})
 }
 
@@ -111,7 +113,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: time.Now().Add(h.auth.TokenTTL()),
 		User: userPublic{
 			ID: user.ID.String(), Email: user.Email, Name: user.Name,
-			Company: user.Company, Role: string(user.Role),
+			Company: user.Company, Role: string(user.Role), EmailVerified: user.EmailVerified,
 		},
 	})
 }
@@ -134,7 +136,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, userPublic{
 		ID: user.ID.String(), Email: user.Email, Name: user.Name,
-		Company: user.Company, Role: string(user.Role),
+		Company: user.Company, Role: string(user.Role), EmailVerified: user.EmailVerified,
 	})
 }
 
@@ -167,7 +169,7 @@ func (h *AuthHandler) PatchMe(w http.ResponseWriter, r *http.Request) {
 	user, _ := h.users.FindByID(r.Context(), userID)
 	writeJSON(w, http.StatusOK, userPublic{
 		ID: user.ID.String(), Email: user.Email, Name: user.Name,
-		Company: user.Company, Role: string(user.Role),
+		Company: user.Company, Role: string(user.Role), EmailVerified: user.EmailVerified,
 	})
 }
 
@@ -220,6 +222,113 @@ func (h *AuthHandler) PatchPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, map[string]string{"status": "password_changed"})
+}
+
+// ── POST /auth/logout ─────────────────────────────────────────────────────────
+
+// Logout — добавляет текущий JWT в blacklist на оставшийся срок жизни.
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	header := r.Header.Get("Authorization")
+	parts := strings.SplitN(header, " ", 2)
+	if len(parts) != 2 {
+		writeError(w, http.StatusBadRequest, "no_token", "Токен отсутствует")
+		return
+	}
+	if err := h.auth.BlacklistToken(r.Context(), parts[1]); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Не удалось завершить сессию")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
+}
+
+// ── POST /auth/verify-email ──────────────────────────────────────────────────
+
+type verifyEmailReq struct {
+	Token string `json:"token"`
+}
+
+func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+	var req verifyEmailReq
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if req.Token == "" {
+		writeError(w, http.StatusBadRequest, "validation_failed", "Токен обязателен")
+		return
+	}
+	if err := h.auth.ConfirmEmail(r.Context(), req.Token); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_token", "Ссылка истекла или недействительна")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "email_verified"})
+}
+
+// ── POST /auth/resend-verification ────────────────────────────────────────────
+
+func (h *AuthHandler) ResendVerification(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Требуется авторизация")
+		return
+	}
+	user, err := h.users.FindByID(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "Пользователь не найден")
+		return
+	}
+	if user.EmailVerified {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "already_verified"})
+		return
+	}
+	if err := h.auth.SendVerificationEmail(r.Context(), user); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "Не удалось отправить письмо")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+}
+
+// ── POST /auth/password-reset/request ─────────────────────────────────────────
+
+type passwordResetReq struct {
+	Email string `json:"email"`
+}
+
+func (h *AuthHandler) PasswordResetRequest(w http.ResponseWriter, r *http.Request) {
+	var req passwordResetReq
+	if !readJSON(w, r, &req) {
+		return
+	}
+	// Молча возвращаем 200 даже для несуществующего email — anti-enumeration.
+	_ = h.auth.RequestPasswordReset(r.Context(), req.Email)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "sent_if_exists"})
+}
+
+// ── POST /auth/password-reset/confirm ─────────────────────────────────────────
+
+type passwordResetConfirmReq struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
+func (h *AuthHandler) PasswordResetConfirm(w http.ResponseWriter, r *http.Request) {
+	var req passwordResetConfirmReq
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if req.Token == "" {
+		writeError(w, http.StatusBadRequest, "validation_failed", "Токен обязателен")
+		return
+	}
+	if err := h.auth.ConfirmPasswordReset(r.Context(), req.Token, req.NewPassword); err != nil {
+		if errors.Is(err, service.ErrWeakPassword) {
+			writeFieldError(w, http.StatusBadRequest, "weak_password",
+				"Пароль должен быть не короче 8 символов", "new_password")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid_token", "Ссылка истекла или недействительна")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "password_changed"})
 }
 

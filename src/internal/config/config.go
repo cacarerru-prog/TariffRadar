@@ -44,6 +44,15 @@ type Config struct {
 
 	// CORS
 	CORSAllowedOrigins string
+
+	// Mail
+	MailDriver   string // "stdout" | "smtp"
+	SMTPHost     string
+	SMTPPort     string
+	SMTPUser     string
+	SMTPPassword string
+	MailFrom     string
+	AppBaseURL   string // используется для ссылок в письмах
 }
 
 // Load — загружает .env (если есть) и собирает конфигурацию.
@@ -70,6 +79,14 @@ func Load() (*Config, error) {
 		JWTSecret: getEnv("JWT_SECRET", ""),
 
 		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "*"),
+
+		MailDriver:   getEnv("MAIL_DRIVER", "stdout"),
+		SMTPHost:     getEnv("SMTP_HOST", ""),
+		SMTPPort:     getEnv("SMTP_PORT", "587"),
+		SMTPUser:     getEnv("SMTP_USER", ""),
+		SMTPPassword: getEnv("SMTP_PASSWORD", ""),
+		MailFrom:     getEnv("MAIL_FROM", "TariffRadar <noreply@tariffradar.local>"),
+		AppBaseURL:   getEnv("APP_BASE_URL", "http://localhost:5173"),
 	}
 
 	// Парсим Redis DB-номер (целое число).

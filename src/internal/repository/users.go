@@ -61,14 +61,14 @@ func (r *UserRepo) Create(ctx context.Context, u *models.User) error {
 // FindByEmail — поиск по email (для логина).
 func (r *UserRepo) FindByEmail(ctx context.Context, email string) (*models.User, error) {
 	const query = `
-		SELECT id, email, password_hash, name, company, phone, role, created_at, updated_at
+		SELECT id, email, password_hash, name, company, phone, role, email_verified, created_at, updated_at
 		FROM users
 		WHERE email = $1`
 
 	var u models.User
 	err := r.db.QueryRow(ctx, query, email).Scan(
 		&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.Company, &u.Phone,
-		&u.Role, &u.CreatedAt, &u.UpdatedAt,
+		&u.Role, &u.EmailVerified, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -82,14 +82,14 @@ func (r *UserRepo) FindByEmail(ctx context.Context, email string) (*models.User,
 // FindByID — поиск по UUID (для middleware, чтобы проверить, что user существует).
 func (r *UserRepo) FindByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
 	const query = `
-		SELECT id, email, password_hash, name, company, phone, role, created_at, updated_at
+		SELECT id, email, password_hash, name, company, phone, role, email_verified, created_at, updated_at
 		FROM users
 		WHERE id = $1`
 
 	var u models.User
 	err := r.db.QueryRow(ctx, query, id).Scan(
 		&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.Company, &u.Phone,
-		&u.Role, &u.CreatedAt, &u.UpdatedAt,
+		&u.Role, &u.EmailVerified, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -118,6 +118,15 @@ func (r *UserRepo) UpdatePassword(ctx context.Context, id uuid.UUID, newHash str
 	_, err := r.db.Exec(ctx, query, newHash, id)
 	if err != nil {
 		return fmt.Errorf("users.UpdatePassword: %w", err)
+	}
+	return nil
+}
+
+// MarkEmailVerified — выставляет email_verified=TRUE.
+func (r *UserRepo) MarkEmailVerified(ctx context.Context, id uuid.UUID) error {
+	const query = `UPDATE users SET email_verified=TRUE WHERE id=$1`
+	if _, err := r.db.Exec(ctx, query, id); err != nil {
+		return fmt.Errorf("users.MarkEmailVerified: %w", err)
 	}
 	return nil
 }

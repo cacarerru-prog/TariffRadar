@@ -11,6 +11,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -35,16 +37,30 @@ var (
 type AuthService struct {
 	users     *repository.UserRepo
 	plans     *repository.PlanRepo
+	tokens    *repository.TokenRepo
+	mailer    Mailer
+	baseURL   string
 	jwtSecret []byte
 	jwtTTL    time.Duration
 }
 
 // NewAuthService — конструктор.
-// plans может быть nil — тогда подписка на free не создаётся (для тестов).
-func NewAuthService(users *repository.UserRepo, plans *repository.PlanRepo, jwtSecret string, jwtTTL time.Duration) *AuthService {
+// plans/tokens/mailer могут быть nil — функции, которые их требуют, будут отключены.
+func NewAuthService(
+	users *repository.UserRepo,
+	plans *repository.PlanRepo,
+	tokens *repository.TokenRepo,
+	mailer Mailer,
+	baseURL string,
+	jwtSecret string,
+	jwtTTL time.Duration,
+) *AuthService {
 	return &AuthService{
 		users:     users,
 		plans:     plans,
+		tokens:    tokens,
+		mailer:    mailer,
+		baseURL:   baseURL,
 		jwtSecret: []byte(jwtSecret),
 		jwtTTL:    jwtTTL,
 	}
@@ -90,11 +106,19 @@ func (s *AuthService) Register(ctx context.Context, in RegisterInput) (*models.U
 	// Подписываем нового пользователя на бесплатный тариф.
 	// Ошибка не блокирует регистрацию — миграция 0006 делает backfill для пропущенных.
 	if s.plans != nil {
-		if err := s.plans.EnsureSubscription(ctx, user.ID); err != nil {
-			// Лог не делаем тут (нет логгера) — UI всё равно увидит free через GetUserPlan fallback.
+		_ = s.plans.EnsureSubscription(ctx, user.ID)
+	}
+
+	// Шлём welcome+verify-email (не критично — fire-and-forget).
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := s.SendVerificationEmail(bgCtx, user); err != nil {
+			// Логгер тут не доступен; сетевые/SMTP-ошибки уйдут в stdoutMailer/log.
 			_ = err
 		}
-	}
+	}()
+
 	return user, nil
 }
 
@@ -172,6 +196,155 @@ func (s *AuthService) ValidateToken(tokenString string) (*TokenClaims, error) {
 
 // TokenTTL — возвращает срок жизни токена (для ответа /auth/login).
 func (s *AuthService) TokenTTL() time.Duration { return s.jwtTTL }
+
+// BlacklistToken — добавляет JWT в Redis-blacklist до его expires_at.
+// Используется при logout.
+func (s *AuthService) BlacklistToken(ctx context.Context, token string) error {
+	if s.tokens == nil {
+		return nil
+	}
+	claims, err := s.ValidateToken(token)
+	if err != nil {
+		return nil // уже невалиден — нечего блэклистить
+	}
+	exp := time.Until(claims.ExpiresAt.Time)
+	if exp <= 0 {
+		return nil
+	}
+	return s.tokens.Blacklist(ctx, token, exp)
+}
+
+// IsTokenBlacklisted — проверяет, был ли токен инвалидирован через logout.
+func (s *AuthService) IsTokenBlacklisted(ctx context.Context, token string) bool {
+	if s.tokens == nil {
+		return false
+	}
+	return s.tokens.IsBlacklisted(ctx, token)
+}
+
+// ── Email verification ──────────────────────────────────────────────────────
+
+const (
+	nsVerify    = "verify"
+	nsReset     = "reset"
+	verifyTTL   = 24 * time.Hour
+	resetTTL    = 30 * time.Minute
+)
+
+// SendVerificationEmail — генерирует токен и отправляет письмо с ссылкой.
+// Используется после регистрации и для повторной отправки.
+func (s *AuthService) SendVerificationEmail(ctx context.Context, user *models.User) error {
+	if s.tokens == nil || s.mailer == nil {
+		return nil // email-сервисы отключены — просто молча выходим
+	}
+	if user.EmailVerified {
+		return nil
+	}
+
+	token, err := randomToken()
+	if err != nil {
+		return err
+	}
+	if err := s.tokens.Set(ctx, nsVerify, token, user.ID, verifyTTL); err != nil {
+		return err
+	}
+
+	link := fmt.Sprintf("%s/verify-email?token=%s", s.baseURL, token)
+	html := fmt.Sprintf(`<p>Здравствуйте%s!</p>
+<p>Подтвердите вашу почту для активации аккаунта в TariffRadar:</p>
+<p><a href="%s">Подтвердить email</a></p>
+<p>Ссылка действует 24 часа. Если вы не регистрировались — просто проигнорируйте письмо.</p>`,
+		nameOrEmpty(user.Name), link)
+
+	return s.mailer.Send(user.Email, "Подтверждение email — TariffRadar", html)
+}
+
+// ConfirmEmail — обменивает токен на отметку email_verified=TRUE.
+func (s *AuthService) ConfirmEmail(ctx context.Context, token string) error {
+	if s.tokens == nil {
+		return errors.New("email verification disabled")
+	}
+	userID, err := s.tokens.Consume(ctx, nsVerify, token)
+	if err != nil {
+		return err
+	}
+	return s.users.MarkEmailVerified(ctx, userID)
+}
+
+// ── Password reset ──────────────────────────────────────────────────────────
+
+// RequestPasswordReset — генерирует токен и шлёт письмо. Если email не найден,
+// возвращает nil (не раскрываем существование email-а — anti-enumeration).
+func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) error {
+	if s.tokens == nil || s.mailer == nil {
+		return nil
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+
+	user, err := s.users.FindByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, repository.ErrUserNotFound) {
+			return nil // не раскрываем
+		}
+		return err
+	}
+
+	token, err := randomToken()
+	if err != nil {
+		return err
+	}
+	if err := s.tokens.Set(ctx, nsReset, token, user.ID, resetTTL); err != nil {
+		return err
+	}
+
+	link := fmt.Sprintf("%s/reset-password?token=%s", s.baseURL, token)
+	html := fmt.Sprintf(`<p>Здравствуйте%s!</p>
+<p>Вы запросили сброс пароля для TariffRadar.</p>
+<p><a href="%s">Установить новый пароль</a></p>
+<p>Ссылка действует 30 минут. Если вы не запрашивали сброс — игнорируйте это письмо.</p>`,
+		nameOrEmpty(user.Name), link)
+
+	return s.mailer.Send(user.Email, "Сброс пароля — TariffRadar", html)
+}
+
+// ConfirmPasswordReset — проверяет токен и устанавливает новый пароль.
+func (s *AuthService) ConfirmPasswordReset(ctx context.Context, token, newPassword string) error {
+	if s.tokens == nil {
+		return errors.New("password reset disabled")
+	}
+	if len(newPassword) < 8 {
+		return ErrWeakPassword
+	}
+
+	userID, err := s.tokens.Consume(ctx, nsReset, token)
+	if err != nil {
+		return err
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("bcrypt: %w", err)
+	}
+	return s.users.UpdatePassword(ctx, userID, string(hash))
+}
+
+// randomToken — 32-байтный hex-токен (64 символа).
+func randomToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// nameOrEmpty — возвращает ", <имя>" или "" для шаблона.
+func nameOrEmpty(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	return ", " + name
+}
 
 // isValidEmail — простая валидация email (содержит @ и точку после @).
 // Для production лучше использовать net/mail.ParseAddress.

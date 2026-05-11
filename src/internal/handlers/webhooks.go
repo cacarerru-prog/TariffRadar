@@ -152,6 +152,52 @@ func (h *WebhooksHandler) Create(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ── Deliveries ───────────────────────────────────────────────────────────────
+
+// deliveryDTO — формат записи об одной попытке доставки.
+type deliveryDTO struct {
+	ID             int64  `json:"id"`
+	Payload        string `json:"payload"`
+	ResponseStatus int    `json:"response_status"`
+	Attempt        int    `json:"attempt"`
+	DeliveredAt    string `json:"delivered_at,omitempty"`
+}
+
+// Deliveries — GET /api/v1/webhooks/{id}/deliveries.
+func (h *WebhooksHandler) Deliveries(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Требуется авторизация")
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "ID должен быть UUID")
+		return
+	}
+
+	items, err := h.repo.ListDeliveries(r.Context(), userID, id, 50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error",
+			"Не удалось получить историю доставок")
+		return
+	}
+
+	out := make([]deliveryDTO, 0, len(items))
+	for _, d := range items {
+		dto := deliveryDTO{
+			ID: d.ID, Payload: d.Payload, ResponseStatus: d.ResponseStatus, Attempt: d.Attempt,
+		}
+		if d.DeliveredAt != nil {
+			dto.DeliveredAt = d.DeliveredAt.UTC().Format("2006-01-02T15:04:05Z")
+		}
+		out = append(out, dto)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // ── Delete ───────────────────────────────────────────────────────────────────
 
 func (h *WebhooksHandler) Delete(w http.ResponseWriter, r *http.Request) {

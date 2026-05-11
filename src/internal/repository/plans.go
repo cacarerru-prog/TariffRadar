@@ -44,6 +44,34 @@ func NewPlanRepo(db *pgxpool.Pool) *PlanRepo {
 	return &PlanRepo{db: db}
 }
 
+// ListAll — все планы из справочника, отсортированные по sort_order.
+func (r *PlanRepo) ListAll(ctx context.Context) ([]Plan, error) {
+	const query = `
+		SELECT code, name, price_byn, routes_max, exports_per_month, webhooks_max, history_days, rate_limit
+		FROM plans
+		ORDER BY sort_order`
+
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("plans.ListAll: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Plan
+	for rows.Next() {
+		var p Plan
+		if err := rows.Scan(
+			&p.Code, &p.Name, &p.PriceBYN,
+			&p.RoutesMax, &p.ExportsPerMonth, &p.WebhooksMax,
+			&p.HistoryDays, &p.RateLimit,
+		); err != nil {
+			return nil, fmt.Errorf("plans.ListAll scan: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // GetByCode — возвращает план по коду (free/pro/enterprise).
 func (r *PlanRepo) GetByCode(ctx context.Context, code string) (*Plan, error) {
 	const query = `

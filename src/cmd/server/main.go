@@ -68,8 +68,12 @@ func main() {
 	webhookRepo := repository.NewWebhookRepo(pgPool)
 	marketplaceRepo := repository.NewMarketplaceRepo(pgPool)
 	planRepo := repository.NewPlanRepo(pgPool)
+	notificationsRepo := repository.NewNotificationsRepo(pgPool)
+	apiKeyRepo := repository.NewAPIKeyRepo(pgPool)
+	tokenRepo := repository.NewTokenRepo(redisClient)
 
-	authSvc := service.NewAuthService(userRepo, planRepo, cfg.JWTSecret, cfg.JWTTTL)
+	mailer := service.NewMailer(cfg.MailDriver, cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.MailFrom)
+	authSvc := service.NewAuthService(userRepo, planRepo, tokenRepo, mailer, cfg.AppBaseURL, cfg.JWTSecret, cfg.JWTTTL)
 	marketSvc := service.NewMarketService(marketRepo, cache)
 	insightsSvc := service.NewInsightsService(insightsRepo, cache)
 	benchmarkSvc := service.NewBenchmarkService(marketRepo, benchmarkRepo)
@@ -85,8 +89,11 @@ func main() {
 	exportHandler := handlers.NewExportHandler(exportSvc)
 	webhooksHandler := handlers.NewWebhooksHandler(webhookRepo, planRepo)
 	marketplaceHandler := handlers.NewMarketplaceHandler(marketplaceRepo)
+	notificationsHandler := handlers.NewNotificationsHandler(notificationsRepo)
+	apiKeysHandler := handlers.NewAPIKeysHandler(apiKeyRepo)
+	plansHandler := handlers.NewPlansHandler(planRepo)
 
-	authMW := middleware.Auth(authSvc)
+	authMW := middleware.Auth(authSvc, apiKeyRepo, userRepo)
 
 	// Шаг 4. Роутер.
 	r := chi.NewRouter()
@@ -144,6 +151,9 @@ func main() {
 		api.Route("/auth", func(a chi.Router) {
 			a.Post("/register", authHandler.Register)
 			a.Post("/login", authHandler.Login)
+			a.Post("/verify-email", authHandler.VerifyEmail)
+			a.Post("/password-reset/request", authHandler.PasswordResetRequest)
+			a.Post("/password-reset/confirm", authHandler.PasswordResetConfirm)
 		})
 
 		// Чтение рыночных данных.
@@ -164,14 +174,28 @@ func main() {
 		// Маркетплейс грузов — чтение публично.
 		api.Get("/marketplace/loads", marketplaceHandler.List)
 
+		// Справочник тарифов — публично.
+		api.Get("/plans", plansHandler.List)
+
 		// ── Защищённые эндпоинты (требуют JWT) ──
 		api.Group(func(p chi.Router) {
 			p.Use(authMW)
+			p.Use(middleware.RateLimit(redisClient, planRepo))
 
+			p.Post("/auth/logout", authHandler.Logout)
 			p.Get("/me", authHandler.Me)
 			p.Patch("/me", authHandler.PatchMe)
 			p.Patch("/me/password", authHandler.PatchPassword)
+			p.Post("/auth/resend-verification", authHandler.ResendVerification)
 			p.Get("/me/plan", authHandler.Plan)
+			p.Get("/me/notifications", notificationsHandler.Get)
+			p.Patch("/me/notifications", notificationsHandler.Patch)
+
+			p.Route("/me/api-keys", func(ak chi.Router) {
+				ak.Get("/", apiKeysHandler.List)
+				ak.Post("/", apiKeysHandler.Create)
+				ak.Delete("/{id}", apiKeysHandler.Delete)
+			})
 
 			p.Post("/deals", dealsHandler.Create)
 			p.Patch("/deals/{id}", dealsHandler.Update)
@@ -189,6 +213,7 @@ func main() {
 				wh.Get("/", webhooksHandler.List)
 				wh.Post("/", webhooksHandler.Create)
 				wh.Delete("/{id}", webhooksHandler.Delete)
+				wh.Get("/{id}/deliveries", webhooksHandler.Deliveries)
 			})
 
 			// Маркетплейс — создание, изменение статуса, удаление (требуют JWT).
