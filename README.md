@@ -166,4 +166,3 @@ docker compose down
 | Export | `POST /api/v1/export` |
 | Webhooks | `POST /api/v1/webhooks` |
 
-Полная спецификация: [`src/docs/openapi.yaml`](./src/docs/openapi.yaml)
