@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -346,12 +347,8 @@ func nameOrEmpty(name string) string {
 	return ", " + name
 }
 
-// isValidEmail — простая валидация email (содержит @ и точку после @).
-// Для production лучше использовать net/mail.ParseAddress.
+// isValidEmail — валидация email по RFC 5322 через стандартный парсер.
 func isValidEmail(s string) bool {
-	at := strings.Index(s, "@")
-	if at < 1 || at == len(s)-1 {
-		return false
-	}
-	return strings.Contains(s[at+1:], ".")
+	_, err := mail.ParseAddress(s)
+	return err == nil
 }
