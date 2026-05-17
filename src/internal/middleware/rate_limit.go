@@ -18,8 +18,14 @@ import (
 	"tariffradar/internal/repository"
 )
 
+func writeServiceUnavailable(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = w.Write([]byte(`{"error":{"code":"service_unavailable","message":"Сервис временно недоступен"}}`))
+}
+
 // RateLimit — middleware с лимитом по тарифу пользователя.
-// Если planRepo вернул ошибку (нет подписки и т.п.) — пропускаем запрос (fail-open).
+// Fail-closed: если план недоступен или Redis недоступен — возвращает 503.
 func RateLimit(redisClient *redis.Client, plans *repository.PlanRepo) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -30,7 +36,12 @@ func RateLimit(redisClient *redis.Client, plans *repository.PlanRepo) func(http.
 			}
 
 			up, err := plans.GetUserPlan(r.Context(), userID)
-			if err != nil || up.Plan.RateLimit <= 0 {
+			if err != nil {
+				writeServiceUnavailable(w)
+				return
+			}
+			// RateLimit <= 0 означает «без ограничений» (например, enterprise).
+			if up.Plan.RateLimit <= 0 {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -40,8 +51,8 @@ func RateLimit(redisClient *redis.Client, plans *repository.PlanRepo) func(http.
 
 			n, err := redisClient.Incr(r.Context(), key).Result()
 			if err != nil {
-				// Redis недоступен — пропускаем (fail-open).
-				next.ServeHTTP(w, r)
+				// Redis недоступен — fail-closed, не пускаем.
+				writeServiceUnavailable(w)
 				return
 			}
 			if n == 1 {
@@ -81,8 +92,8 @@ func RateLimitIP(redisClient *redis.Client) func(http.Handler) http.Handler {
 
 			n, err := redisClient.Incr(r.Context(), key).Result()
 			if err != nil {
-				// Redis недоступен — пропускаем.
-				next.ServeHTTP(w, r)
+				// Redis недоступен — fail-closed, не пускаем.
+				writeServiceUnavailable(w)
 				return
 			}
 			if n == 1 {
