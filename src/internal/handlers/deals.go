@@ -319,7 +319,7 @@ func (h *DealsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	role, _ := middleware.RoleFromContext(r.Context())
-	if deal.UserID != userID && string(role) != "admin" {
+	if deal.UserID != userID && role != models.RoleAdmin {
 		writeError(w, http.StatusForbidden, "forbidden", "Нет доступа к этой сделке")
 		return
 	}
@@ -365,7 +365,7 @@ func (h *DealsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	role, _ := middleware.RoleFromContext(r.Context())
-	if deal.UserID != userID && string(role) != "admin" {
+	if deal.UserID != userID && role != models.RoleAdmin {
 		writeError(w, http.StatusForbidden, "forbidden", "Нет доступа к этой сделке")
 		return
 	}

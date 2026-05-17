@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"tariffradar/internal/middleware"
+	"tariffradar/internal/models"
 	"tariffradar/internal/repository"
 )
 
@@ -239,7 +240,7 @@ func (h *MarketplaceHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	role, _ := middleware.RoleFromContext(r.Context())
 	if load.UserID == nil || *load.UserID != userID {
-		if string(role) != "admin" {
+		if role != models.RoleAdmin {
 			writeError(w, http.StatusForbidden, "forbidden", "Нет доступа к этому объявлению")
 			return
 		}
@@ -279,7 +280,7 @@ func (h *MarketplaceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	role, _ := middleware.RoleFromContext(r.Context())
 	if load.UserID == nil || *load.UserID != userID {
-		if string(role) != "admin" {
+		if role != models.RoleAdmin {
 			writeError(w, http.StatusForbidden, "forbidden", "Нет доступа к этому объявлению")
 			return
 		}
