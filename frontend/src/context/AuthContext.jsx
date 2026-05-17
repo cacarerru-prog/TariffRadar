@@ -14,9 +14,6 @@ export function AuthProvider({ children }) {
     const token = localStorage.getItem('token')
     if (!token) { setLoading(false); return }
 
-    // Если токен мок-демо — просто берём юзера из localStorage без запроса к API
-    if (token === 'mock-demo-token') { setLoading(false); return }
-
     authApi.me()
       .then(u => { setUser(u); localStorage.setItem('user', JSON.stringify(u)) })
       .catch(() => { localStorage.removeItem('token'); localStorage.removeItem('user'); setUser(null) })
@@ -24,27 +21,11 @@ export function AuthProvider({ children }) {
   }, [])
 
   const login = useCallback(async (email, password) => {
-    try {
-      const data = await authApi.login(email, password)
-      localStorage.setItem('token', data.token)
-      localStorage.setItem('user', JSON.stringify(data.user))
-      setUser(data.user)
-      return data.user
-    } catch {
-      // Мок-режим: если бэкенд недоступен — входим с демо-данными
-      const mockUser = {
-        id: 1,
-        email: email,
-        name: 'Алексей Демо',
-        role: email.includes('logist') ? 'logist' : 'shipper',
-        company: 'ДемоКомпания',
-        subscription: { plan: 'pro' }
-      }
-      localStorage.setItem('token', 'mock-demo-token')
-      localStorage.setItem('user', JSON.stringify(mockUser))
-      setUser(mockUser)
-      return mockUser
-    }
+    const data = await authApi.login(email, password)
+    localStorage.setItem('token', data.token)
+    localStorage.setItem('user', JSON.stringify(data.user))
+    setUser(data.user)
+    return data.user
   }, [])
 
   const register = useCallback(async (email, password, name, company) => {

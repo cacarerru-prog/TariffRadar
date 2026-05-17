@@ -94,6 +94,7 @@ func main() {
 	plansHandler := handlers.NewPlansHandler(planRepo)
 
 	authMW := middleware.Auth(authSvc, apiKeyRepo, userRepo)
+	rateLimitIPMW := middleware.RateLimitIP(redisClient)
 
 	// Шаг 4. Роутер.
 	r := chi.NewRouter()
@@ -156,26 +157,24 @@ func main() {
 			a.Post("/password-reset/confirm", authHandler.PasswordResetConfirm)
 		})
 
-		// Чтение рыночных данных.
-		api.Get("/market/stats", marketHandler.Stats)
-		api.Get("/deals", dealsHandler.List)
-		api.Post("/benchmark", benchmarkHandler.Calculate)
+		// Публичные эндпоинты с IP rate limiting (60 req/min с одного IP).
+		api.Group(func(pub chi.Router) {
+			pub.Use(rateLimitIPMW)
 
-		// Аналитика.
-		api.Route("/insights", func(in chi.Router) {
-			in.Get("/trends", insightsHandler.Trends)
-			in.Get("/seasonality", insightsHandler.Seasonality)
-			in.Get("/by-cargo", insightsHandler.ByCargo)
+			pub.Get("/market/stats", marketHandler.Stats)
+			pub.Get("/deals", dealsHandler.List)
+			pub.Post("/benchmark", benchmarkHandler.Calculate)
+
+			pub.Route("/insights", func(in chi.Router) {
+				in.Get("/trends", insightsHandler.Trends)
+				in.Get("/seasonality", insightsHandler.Seasonality)
+				in.Get("/by-cargo", insightsHandler.ByCargo)
+			})
+
+			pub.Get("/export/deals", exportHandler.Deals)
+			pub.Get("/marketplace/loads", marketplaceHandler.List)
+			pub.Get("/plans", plansHandler.List)
 		})
-
-		// Экспорт (публично, но в дальнейшем можно защитить).
-		api.Get("/export/deals", exportHandler.Deals)
-
-		// Маркетплейс грузов — чтение публично.
-		api.Get("/marketplace/loads", marketplaceHandler.List)
-
-		// Справочник тарифов — публично.
-		api.Get("/plans", plansHandler.List)
 
 		// ── Защищённые эндпоинты (требуют JWT) ──
 		api.Group(func(p chi.Router) {

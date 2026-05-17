@@ -64,6 +64,47 @@ func RateLimit(redisClient *redis.Client, plans *repository.PlanRepo) func(http.
 	}
 }
 
+// RateLimitIP — лимит запросов по IP для публичных (неаутентифицированных) эндпоинтов.
+// Алгоритм: фиксированное окно 60s, 60 запросов/мин с одного IP.
+func RateLimitIP(redisClient *redis.Client) func(http.Handler) http.Handler {
+	const limit = 60
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := r.RemoteAddr
+			// Если за reverse-proxy — используем реальный IP (chimw.RealIP уже обработал).
+			if xff := r.Header.Get("X-Real-IP"); xff != "" {
+				ip = xff
+			}
+
+			minute := time.Now().Unix() / 60
+			key := fmt.Sprintf("rl:ip:%s:%d", ip, minute)
+
+			n, err := redisClient.Incr(r.Context(), key).Result()
+			if err != nil {
+				// Redis недоступен — пропускаем.
+				next.ServeHTTP(w, r)
+				return
+			}
+			if n == 1 {
+				_ = redisClient.Expire(r.Context(), key, 65*time.Second).Err()
+			}
+
+			w.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit))
+			w.Header().Set("X-RateLimit-Remaining", strconv.FormatInt(max64(0, int64(limit)-n), 10))
+
+			if n > int64(limit) {
+				w.Header().Set("Retry-After", "60")
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(`{"error":{"code":"rate_limit","message":"Слишком много запросов. Попробуйте через минуту."}}`))
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func max64(a, b int64) int64 {
 	if a > b {
 		return a

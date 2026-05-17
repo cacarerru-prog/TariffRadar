@@ -89,9 +89,6 @@ export function LoginPage() {
           Нет аккаунта?{' '}
           <Link to="/register" style={{ color: '#2563EB', fontWeight: 500, textDecoration: 'none' }}>Зарегистрироваться →</Link>
         </div>
-        <div style={{ textAlign: 'center', marginTop: 8, fontSize: 11, color: '#CBD5E1' }}>
-          Тест: admin@tariffradar.test / Admin123!
-        </div>
       </div>
     </div>
   )
