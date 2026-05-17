@@ -105,6 +105,7 @@ func main() {
 	r.Use(chimw.Logger)
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.Timeout(15 * time.Second))
+	r.Use(middleware.SecureHeaders)
 
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   splitCSV(cfg.CORSAllowedOrigins),
