@@ -54,6 +54,34 @@ func (t *TokenRepo) IsBlacklisted(ctx context.Context, value string) bool {
 	return n > 0
 }
 
+// IncrLoginFailures — увеличивает счётчик неудачных попыток входа для email.
+// Возвращает текущее количество попыток. TTL окна — 15 минут.
+func (t *TokenRepo) IncrLoginFailures(ctx context.Context, email string) (int64, error) {
+	key := "login:fail:" + email
+	n, err := t.r.Incr(ctx, key).Result()
+	if err != nil {
+		return 0, fmt.Errorf("tokens.IncrLoginFailures: %w", err)
+	}
+	if n == 1 {
+		_ = t.r.Expire(ctx, key, 15*time.Minute).Err()
+	}
+	return n, nil
+}
+
+// ResetLoginFailures — сбрасывает счётчик неудачных попыток после успешного входа.
+func (t *TokenRepo) ResetLoginFailures(ctx context.Context, email string) {
+	_ = t.r.Del(ctx, "login:fail:"+email).Err()
+}
+
+// LoginFailures — возвращает текущее количество неудачных попыток.
+func (t *TokenRepo) LoginFailures(ctx context.Context, email string) (int64, error) {
+	n, err := t.r.Get(ctx, "login:fail:"+email).Int64()
+	if errors.Is(err, redis.Nil) {
+		return 0, nil
+	}
+	return n, err
+}
+
 // Consume — атомарно возвращает user_id и удаляет ключ (одноразовое использование).
 func (t *TokenRepo) Consume(ctx context.Context, namespace, token string) (uuid.UUID, error) {
 	key := namespace + ":" + token

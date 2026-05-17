@@ -104,6 +104,10 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnauthorized, "invalid_credentials", "Неверный email или пароль")
 			return
 		}
+		if errors.Is(err, service.ErrAccountLocked) {
+			writeError(w, http.StatusTooManyRequests, "account_locked", err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "internal_error", "Внутренняя ошибка сервера")
 		return
 	}

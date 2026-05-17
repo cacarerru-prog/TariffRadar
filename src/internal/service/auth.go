@@ -32,7 +32,10 @@ var (
 	ErrInvalidEmail       = errors.New("некорректный email")
 	ErrWeakPassword       = errors.New("пароль должен содержать минимум 8 символов")
 	ErrInvalidToken       = errors.New("невалидный токен")
+	ErrAccountLocked      = errors.New("аккаунт временно заблокирован — слишком много неудачных попыток")
 )
+
+const maxLoginAttempts = 5
 
 // AuthService — сервис аутентификации.
 type AuthService struct {
@@ -124,13 +127,24 @@ func (s *AuthService) Register(ctx context.Context, in RegisterInput) (*models.U
 }
 
 // Login — проверяет учётные данные и возвращает JWT-токен.
+// После 5 неудачных попыток в течение 15 минут аккаунт блокируется.
 func (s *AuthService) Login(ctx context.Context, email, password string) (string, *models.User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 
+	// Проверяем счётчик до запроса к БД — не раскрываем существование email.
+	if s.tokens != nil {
+		n, _ := s.tokens.LoginFailures(ctx, email)
+		if n >= maxLoginAttempts {
+			return "", nil, ErrAccountLocked
+		}
+	}
+
 	user, err := s.users.FindByEmail(ctx, email)
 	if err != nil {
-		// Не раскрываем, что именно не так (email или пароль) — это helps brute-force.
 		if errors.Is(err, repository.ErrUserNotFound) {
+			if s.tokens != nil {
+				_, _ = s.tokens.IncrLoginFailures(ctx, email)
+			}
 			return "", nil, ErrInvalidCredentials
 		}
 		return "", nil, err
@@ -138,7 +152,15 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (string
 
 	// Сравниваем хеш пароля.
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		if s.tokens != nil {
+			_, _ = s.tokens.IncrLoginFailures(ctx, email)
+		}
 		return "", nil, ErrInvalidCredentials
+	}
+
+	// Успешный вход — сбрасываем счётчик.
+	if s.tokens != nil {
+		s.tokens.ResetLoginFailures(ctx, email)
 	}
 
 	// Генерируем JWT.
