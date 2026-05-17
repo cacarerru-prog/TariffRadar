@@ -123,6 +123,9 @@ func (c *Config) validate() error {
 	if c.AppEnv == "production" && c.DBPassword == "" {
 		return errors.New("DB_PASSWORD обязателен в production")
 	}
+	if c.AppEnv == "production" && c.DBSSLMode == "disable" {
+		return errors.New("DB_SSLMODE=disable запрещён в production — используй require или verify-full")
+	}
 	return nil
 }
 
